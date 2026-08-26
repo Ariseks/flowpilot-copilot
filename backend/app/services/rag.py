@@ -171,14 +171,14 @@ class LocalTfidfRetriever:
     ) -> list[Citation]:
         selected = strategy or self.default_strategy
         ranked = self.rank(query, selected)
-        # RRF 的分数仅代表排序融合权重，不能当作相关度阈值。对外保留 TF-IDF 余弦分，
-        # 使既有 Top-1 证据边界和 UI 百分比语义继续成立。
+        # RRF 与 BM25 的内部分数只用于排序，不能直接拿来做跨策略证据判断。
+        # 所有策略对外统一暴露 TF-IDF 余弦分，让 Top-1 证据门槛和 UI 百分比保持同一语义。
         tfidf_scores = {chunk.id: score for score, chunk in self._rank_tfidf(query)}
         return [
             Citation(
                 source=chunk.source,
                 chunk=chunk.text,
-                score=round(tfidf_scores[chunk.id] if selected == "rrf" else score, 4),
+                score=round(tfidf_scores.get(chunk.id, 0.0), 4),
                 chunk_id=chunk.id,
             )
             for score, chunk in ranked[:top_k]

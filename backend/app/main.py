@@ -39,7 +39,7 @@ def build_services(settings: Settings) -> Services:
     retriever = LocalTfidfRetriever()
     retriever.build(store.documents())
     llm = LLMClient(settings)
-    copilot = CopilotService(retriever, llm)
+    copilot = CopilotService(retriever, llm, settings.evidence_threshold)
     return Services(
         settings=settings,
         store=store,

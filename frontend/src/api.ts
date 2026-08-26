@@ -1,5 +1,5 @@
 import { dashboardData, knowledgeSources } from './mockData'
-import type { AgentStep, AgentTrace, Citation, CopilotAnswer, DashboardData, EvaluationCaseDetail, EvaluationSet, GapItem, KnowledgeSource, LowScoreItem, TaskHistoryItem } from './types'
+import type { AgentStep, AgentTrace, Citation, CopilotAnswer, DashboardData, EvaluationCaseDetail, EvaluationSet, GapItem, KnowledgeSource, LowScoreItem, TaskHistoryItem, TaskReplay, RetrievalStrategy } from './types'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || window.location.origin
 const REQUEST_TIMEOUT = 60000
@@ -56,6 +56,7 @@ function mapTask(task: BackendTask, question: string, taskType: string): Copilot
 }
 
 function mapHistoryTask(task: BackendTask): TaskHistoryItem { return { id: task.id, input: task.input, intent: task.intent, createdAt: task.created_at, trace: task.trace } }
+function mapReplay(task: BackendTask): TaskReplay { return { id: task.id, input: task.input, intent: task.intent, artifacts: task.artifacts, citations: mapCitations(task.citations), trace: task.trace, createdAt: task.created_at } }
 function mapDocument(item: BackendDocument): KnowledgeSource { return { id: item.id, name: item.title, type: item.category, status: 'ready', chunks: item.chunk_count, updatedAt: new Date(item.created_at).toLocaleDateString('zh-CN'), owner: item.source.startsWith('用户') ? '运营管理员' : 'FlowPilot 团队' } }
 function mapDocuments(items: BackendDocument[]): KnowledgeSource[] { return items.map(mapDocument) }
 
@@ -118,6 +119,7 @@ export const apiClient = {
     return { items: data.items.map(mapHistoryTask), total: data.total, nextCursor: data.next_cursor || undefined }
   },
   getAgentTask: (taskId: string) => request<BackendTask>(`/api/agent/tasks/${taskId}`),
+  replayAgentTask: async (taskId: string, options?: { retrievalStrategy?: RetrievalStrategy; topK?: number }) => mapReplay(await request<BackendTask>(`/api/agent/tasks/${taskId}/replay`, { method: 'POST', body: JSON.stringify({ retrieval_strategy: options?.retrievalStrategy, top_k: options?.topK }) })),
   askCopilot: async (question: string, taskType: string) => mapTask(await request<BackendTask>('/api/agent/tasks', { method: 'POST', body: JSON.stringify({ input: question, intent: intentMap[taskType] || 'auto', top_k: 4 }) }), question, taskType),
   submitFeedback: (taskId: string, message: string, helpful: boolean) => request<{ id: string }>('/api/feedback', { method: 'POST', body: JSON.stringify({ task_id: taskId, message, rating: helpful ? 5 : 2, category: 'copilot_answer', user: '演示用户' }) }),
   importText: async (name: string, content: string) => mapDocument(await request<BackendDocument>('/api/documents/import', { method: 'POST', body: JSON.stringify({ title: name, text: content, source: `用户导入/${name}`, category: '用户导入' }) })),

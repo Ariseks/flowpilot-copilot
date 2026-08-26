@@ -5,11 +5,16 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from app.models import AgentIntent, AgentStep, Citation
+from app.models import AgentIntent, AgentStep, Citation, RetrievalStrategy
 from app.services.copilot import CopilotService
+from app.services.llm import LLMResult
 
 
 class AgentService:
+    PROMPT_VERSION = "agent-v1"
+    TRACE_PROMPT_LIMIT = 4000
+    TRACE_FEEDBACK_MESSAGE_LIMIT = 500
+
     ROUTES: dict[AgentIntent, tuple[str, ...]] = {
         "customer_reply": ("客服", "回复", "投诉", "工单", "客户", "道歉"),
         "feedback_analysis": ("反馈", "分析", "洞察", "聚类", "痛点", "满意度"),
@@ -61,26 +66,43 @@ class AgentService:
         requested_intent: str,
         top_k: int,
         feedback: list[dict[str, Any]],
+        retrieval_strategy: RetrievalStrategy | None = None,
+        replay_of: str | None = None,
     ) -> dict[str, Any]:
         started = time.perf_counter()
         intent = self.route(text, requested_intent)
+        selected_strategy = retrieval_strategy or self.copilot.retriever.default_strategy
         retrieval_started = time.perf_counter()
-        citations = self.copilot.retriever.search(text, top_k)
+        evidence = self.copilot.retrieve_evidence(text, top_k, selected_strategy)
+        raw_citations = evidence.raw_citations
+        citations = evidence.citations
         retrieve_ms = round((time.perf_counter() - retrieval_started) * 1000)
         user_prompt = self._user_prompt(intent, text, feedback)
-        generation = await self.copilot.llm.complete(
-            self.SYSTEM_PROMPTS[intent], user_prompt, citations
+        generation = (
+            LLMResult(None, "demo", True, "evidence_threshold", 0)
+            if not citations
+            else await self.copilot.llm.complete(
+                self.SYSTEM_PROMPTS[intent], user_prompt, citations
+            )
         )
         artifacts = self._artifacts(intent, text, generation.content, citations, feedback)
         steps = [
             AgentStep(name="意图路由", detail=f"识别为 {intent}"),
-            AgentStep(name="知识检索", detail=f"本地 Hybrid RRF 命中 {len(citations)} 个片段"),
+            AgentStep(
+                name="知识检索",
+                detail=(
+                    f"证据门槛拒答：原始候选 {len(raw_citations)} 个，"
+                    f"Top-1 {raw_citations[0].score:.2f} < {evidence.threshold:.2f}"
+                    if not citations and raw_citations
+                    else f"本地 {evidence.status} 命中 {len(citations)} 个片段"
+                ),
+            ),
             AgentStep(
                 name="产物生成",
                 detail=(
                     f"云模型已生成 {artifacts['type']} 产物"
                     if generation.content
-                    else f"本地规则已生成 {artifacts['type']} 降级产物"
+                    else f"本地规则已生成 {artifacts['type']} {'拒答' if not citations else '降级'}产物"
                 ),
             ),
         ]
@@ -89,7 +111,7 @@ class AgentService:
             "input": text,
             "intent": intent,
             "status": "completed",
-            "mode": self.copilot.llm.mode,
+            "mode": self.copilot.effective_mode(generation),
             "steps": [step.model_dump() for step in steps],
             "artifacts": artifacts,
             "citations": [item.model_dump() for item in citations],
@@ -101,16 +123,36 @@ class AgentService:
                 },
                 "retrieval": {
                     "citation_count": len(citations),
-                    "top_score": citations[0].score if citations else 0.0,
-                    "strategy": self.copilot.retriever.default_strategy,
+                    "raw_citation_count": len(raw_citations),
+                    "top_score": raw_citations[0].score if raw_citations else 0.0,
+                    "strategy": selected_strategy,
+                    "evidence_threshold": evidence.threshold,
+                    "evidence_status": evidence.status,
+                    "candidates": [item.model_dump() for item in raw_citations],
                 },
                 "generation": {
-                    "mode": self.copilot.llm.mode,
+                    "mode": self.copilot.effective_mode(generation),
                     "provider_used": generation.provider_used,
                     "fallback_used": generation.fallback_used,
                     "error_type": generation.error_type,
                     "model": self.copilot.llm.settings.llm_model if generation.provider_used == "cloud" else None,
+                    "generator_version": (
+                        self.copilot.llm.settings.llm_model
+                        if generation.provider_used == "cloud"
+                        else "deterministic-demo-v1"
+                    ),
+                    "prompt_version": self.PROMPT_VERSION,
+                    "system_prompt": self.SYSTEM_PROMPTS[intent],
+                    "user_prompt": user_prompt[: self.TRACE_PROMPT_LIMIT],
+                    "context_chunk_ids": [item.chunk_id for item in citations],
                 },
+                "request": {
+                    "requested_intent": requested_intent,
+                    "top_k": top_k,
+                    "retrieval_strategy": selected_strategy,
+                },
+                "feedback_context": self._feedback_context(feedback),
+                "replay_of": replay_of,
             },
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -124,6 +166,21 @@ class AgentService:
             for item in feedback[-20:]
         )
         return f"分析任务：{text}\n\n站内反馈摘要：\n{feedback_summary or '暂无站内反馈'}"
+
+    @staticmethod
+    def _feedback_context(feedback: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": item["id"],
+                "message": item["message"][: AgentService.TRACE_FEEDBACK_MESSAGE_LIMIT],
+                "rating": item["rating"],
+                "category": item["category"],
+                "user": item.get("user", "演示用户"),
+                "task_id": item.get("task_id"),
+                "created_at": item["created_at"],
+            }
+            for item in feedback[-20:]
+        ]
 
     def _artifacts(
         self,

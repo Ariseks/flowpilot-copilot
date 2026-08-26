@@ -1,6 +1,10 @@
 from io import BytesIO
 
 from docx import Document
+from fastapi.testclient import TestClient
+
+from app.config import Settings
+from app.main import create_app
 
 
 def test_health_and_dashboard_are_ready_in_demo_mode(client):
@@ -108,6 +112,138 @@ def test_agent_routes_returns_trace_and_supports_replay(client):
     assert replay.json()["id"] == body["id"]
 
 
+def test_auto_agent_task_can_be_replayed(client):
+    created = client.post(
+        "/api/agent/tasks",
+        json={"input": "请分析近期客户反馈痛点和满意度", "intent": "auto"},
+    )
+    assert created.status_code == 201
+    original = created.json()
+
+    replay = client.post(f"/api/agent/tasks/{original['id']}/replay", json={})
+    assert replay.status_code == 201
+    body = replay.json()
+    assert body["intent"] == "feedback_analysis"
+    assert body["trace"]["request"]["requested_intent"] == "auto"
+    assert body["trace"]["replay_of"] == original["id"]
+
+
+def test_agent_uses_same_evidence_gate_as_chat(client):
+    payload = {"input": "管理员如何配置 Kubernetes 集群？", "intent": "knowledge_qa", "top_k": 4}
+
+    agent = client.post("/api/agent/tasks", json=payload)
+    assert agent.status_code == 201
+    agent_body = agent.json()
+    assert agent_body["citations"] == []
+    assert agent_body["trace"]["retrieval"]["raw_citation_count"] >= 1
+    assert agent_body["trace"]["retrieval"]["evidence_status"] == "refused"
+    assert agent_body["trace"]["retrieval"]["evidence_threshold"] == 0.1
+    assert agent_body["trace"]["generation"]["provider_used"] == "demo"
+    assert "没有足够信息" in agent_body["artifacts"]["answer"]
+
+    chat = client.post("/api/chat", json={"message": payload["input"], "top_k": payload["top_k"]})
+    assert chat.status_code == 200
+    assert chat.json()["citations"] == []
+
+
+def test_bm25_replay_uses_tf_idf_evidence_score(client):
+    response = client.post(
+        "/api/agent/tasks",
+        json={
+            "input": "管理员如何配置 Kubernetes 集群？",
+            "intent": "knowledge_qa",
+            "retrieval_strategy": "bm25",
+        },
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["trace"]["retrieval"]["raw_citation_count"] >= 1
+    assert body["trace"]["retrieval"]["top_score"] < 0.1
+    assert body["citations"] == []
+    assert body["trace"]["retrieval"]["evidence_status"] == "refused"
+
+
+def test_passed_evidence_gate_filters_weak_candidates_before_generation(client):
+    response = client.post(
+        "/api/agent/tasks",
+        json={
+            "input": "专业版每月多少钱？",
+            "intent": "knowledge_qa",
+            "top_k": 4,
+        },
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["trace"]["retrieval"]["raw_citation_count"] > body["trace"]["retrieval"]["citation_count"]
+    assert body["trace"]["retrieval"]["citation_count"] == len(body["citations"])
+    assert all(item["score"] >= 0.1 for item in body["citations"])
+
+
+def test_agent_trace_preserves_replay_context(client):
+    feedback = client.post(
+        "/api/feedback",
+        json={"message": "管理员如何配置 Kubernetes 集群？", "rating": 2, "category": "知识缺口"},
+    )
+    assert feedback.status_code == 201
+
+    response = client.post(
+        "/api/agent/tasks",
+        json={
+            "input": "管理员如何配置 Kubernetes 集群？",
+            "intent": "knowledge_qa",
+            "top_k": 4,
+            "retrieval_strategy": "rrf",
+        },
+    )
+    assert response.status_code == 201
+    trace = response.json()["trace"]
+    assert trace["request"] == {
+        "requested_intent": "knowledge_qa",
+        "top_k": 4,
+        "retrieval_strategy": "rrf",
+    }
+    assert trace["retrieval"]["candidates"]
+    assert len(trace["retrieval"]["candidates"]) == trace["retrieval"]["raw_citation_count"]
+    assert trace["generation"]["prompt_version"] == "agent-v1"
+    assert trace["generation"]["system_prompt"]
+    assert "Kubernetes" in trace["generation"]["user_prompt"]
+    assert trace["generation"]["context_chunk_ids"] == []
+    assert trace["feedback_context"]
+    assert any(item["id"] == feedback.json()["id"] for item in trace["feedback_context"])
+
+
+def test_agent_task_replay_can_override_retrieval_configuration(client):
+    original = client.post(
+        "/api/agent/tasks",
+        json={
+            "input": "专业版每月多少钱？",
+            "intent": "knowledge_qa",
+            "top_k": 4,
+            "retrieval_strategy": "rrf",
+        },
+    )
+    assert original.status_code == 201
+    original_body = original.json()
+
+    replay = client.post(
+        f"/api/agent/tasks/{original_body['id']}/replay",
+        json={"retrieval_strategy": "tfidf", "top_k": 1},
+    )
+    assert replay.status_code == 201
+    replay_body = replay.json()
+    assert replay_body["id"] != original_body["id"]
+    assert replay_body["input"] == original_body["input"]
+    assert replay_body["intent"] == original_body["intent"]
+    assert replay_body["trace"]["replay_of"] == original_body["id"]
+    assert replay_body["trace"]["request"] == {
+        "requested_intent": "knowledge_qa",
+        "top_k": 1,
+        "retrieval_strategy": "tfidf",
+    }
+    assert replay_body["trace"]["retrieval"]["strategy"] == "tfidf"
+    assert len(replay_body["trace"]["retrieval"]["candidates"]) <= 1
+
+
 def test_explicit_agent_intents_are_supported(client):
     cases = {
         "knowledge_qa": "knowledge_answer",
@@ -186,6 +322,41 @@ def test_feedback_and_versioned_evaluation(client, persisted_state):
     assert body["citation_correctness"] is not None
     assert body["faithfulness"] is not None
     assert body["cases"][0]["unsupported_claims"] == [] or isinstance(body["cases"][0]["unsupported_claims"], list)
+
+
+def test_evaluation_metrics_use_the_shared_evidence_gate(client):
+    response = client.post(
+        "/api/evaluation",
+        json={
+            "cases": [
+                {
+                    "id": "irrelevant",
+                    "category": "拒答边界",
+                    "question": "管理员如何配置 Kubernetes 集群？",
+                    "expected_keywords": [],
+                    "expected_sources": [],
+                    "top_k": 4,
+                }
+            ]
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["cases"][0]["hit"] is False
+    assert body["cases"][0]["hybrid_hit"] is False
+    assert body["hybrid"]["retrieval_hit_rate"] == 0.0
+
+
+def test_cloud_configured_evidence_refusal_reports_effective_demo_mode(tmp_path):
+    settings = Settings(llm_api_key="test-key", data_file=str(tmp_path / "state.json"))
+    with TestClient(create_app(settings)) as cloud_client:
+        response = cloud_client.post(
+            "/api/chat",
+            json={"message": "管理员如何配置 Kubernetes 集群？", "top_k": 4},
+        )
+    assert response.status_code == 200
+    assert response.json()["mode"] == "demo"
+    assert response.json()["citations"] == []
 
 
 def test_task_history_supports_filters_pagination_and_trace_strategy(client):

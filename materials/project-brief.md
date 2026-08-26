@@ -65,8 +65,8 @@ LangChain Core 适配层：Document + RunnableLambda，封装 retrieve → gener
 
 | 业务功能 | 前端交互与页面 | 后端接口 | 核心实现 | 返回结果与数据沉淀 | 当前边界 |
 |---|---|---|---|---|---|
-| 智能工作台 | 输入问题、选择任务类型、查看产物/步骤/引用/Trace | `POST /api/agent/tasks` | `AgentService.execute()`：路由 → 检索 → 生成 → 专用 Artifact | `intent`、`steps`、`artifacts`、`citations`、耗时/降级 Trace 写入 Agent 任务记录 | 不执行外部动作，仅生成建议或草稿 |
-| 知识问答 | Copilot 对话、引用展开 | `POST /api/chat` | `CopilotService.answer()` 调用本地检索器，并把 Top-K 证据传入模型 | `answer`、`mode`、`citations`；会话计数 +1 | 不是语义向量检索；证据不足时只能基于已有片段回答 |
+| 智能工作台 | 输入问题、选择任务类型、查看产物/步骤/引用/Trace | `POST /api/agent/tasks` | `AgentService.execute()`：路由 → 共享证据门槛 → 检索 → 生成 → 专用 Artifact | `intent`、`steps`、`artifacts`、`citations`、原始候选/门槛判定/请求配置/版本与反馈快照写入任务 Trace | 不执行外部动作，仅生成建议或草稿；低相关候选不会交给模型 |
+| 知识问答 | Copilot 对话、引用展开 | `POST /api/chat` | `CopilotService.answer()` 调用共享 `retrieve_evidence()`，只把通过门槛的 Top-K 证据传入模型 | `answer`、`mode`、`citations`；会话计数 +1 | 不是语义向量检索；低于证据门槛时明确拒答 |
 | LangChain 链路验证 | 可调用框架化 RAG 接口 | `POST /api/langchain/chat` | `Document` 承载检索结果；`RunnableLambda` 组成 `retrieve → generate` | 框架链路结果；会话计数 +1 | 真实使用 LangChain Core，未使用 LangGraph |
 | 客服回复草稿 | 工作台选择“客服回复” | `POST /api/agent/tasks` | `customer_reply` Prompt + 引用事实提取 + 规则降级模板 | 主题、回复正文、处理要点、引用 | 文案须人工审核；不会声称已核查账户或订单 |
 | 用户反馈分析 | 工作台选择“用户研究” | `POST /api/agent/tasks` | 读取最近最多 20 条本地反馈；`Counter` 聚合分类与均分；模型输出总体判断 | 总结、分类分布、低分发现、建议 | 样本是本地 Demo/运行数据，非生产用户样本 |
@@ -76,7 +76,7 @@ LangChain Core 适配层：Document + RunnableLambda，封装 retrieve → gener
 | 知识资产查看 | 文档清单与分类 | `GET /api/documents` | 根据检索器 `chunk_counts()` 关联文档与切片数 | 文档 ID、来源、分类、创建时间、片段数 | 无文档权限、版本管理和删除流程 |
 | 回答质量反馈 | 点赞/点踩、输入反馈内容 | `GET /api/feedback`、`POST /api/feedback` | Pydantic 校验后生成反馈 ID 和时间戳，并关联 `task_id` 写入 JSON 状态 | 反馈可关联具体任务，供洞察、看板和反馈分析复用 | 无登录身份、用户归因或人工工单流转 |
 | 离线评估中心 | 运行评估、查看每条 Case 结果 | `POST /api/evaluation` | 同一 20 条 Golden Dataset 分别运行 TF-IDF、BM25 融合 RRF；离线评估固定用检索证据生成确定性答案 | Baseline/Hybrid 命中、Source Recall@K、MRR、关键词召回、拒答正确率、引用正确性、规则忠实度、待复核主张 | 规则式 Citation/Faithfulness 为可解释 MVP，不等同人工标注或 LLM Judge |
-| Agent 任务历史与回放 | 按意图/降级状态筛选、查看完整 Trace | `GET /api/agent/tasks`、`GET /api/agent/tasks/{task_id}` | JSON MVP 中倒序、筛选、limit/cursor 分页；回放读取持久化任务 | 输入、意图、耗时、检索策略、Top-1、模型降级、完整任务 JSON | 历史数据量大时应迁移数据库；老任务缺少 input/trace 时展示兼容默认值 |
+| Agent 任务历史与回放 | 按意图/降级状态筛选、查看完整 Trace、切换策略重跑 | `GET /api/agent/tasks`、`GET /api/agent/tasks/{task_id}`、`POST /api/agent/tasks/{task_id}/replay` | JSON MVP 中倒序、筛选、limit/cursor 分页；回放读取原任务输入并可覆盖检索策略/Top-K，生成新任务并记录 `replay_of` | 输入、意图、耗时、检索策略、Top-1、原始候选、门槛、模型/Prompt 版本、实际 Prompt、反馈快照、重跑关联 | 历史数据量大时应迁移数据库；老任务缺少上下文时使用兼容默认值，无法还原原始配置 |
 | 运营洞察与复盘 | 查看待补知识信号、低分任务 | `GET /api/insights`、`GET /api/agent/tasks/{task_id}` | `InsightsService` 聚合任务、检索分数、模型降级和关联反馈 | 高频/低分/低置信信号、低分复盘队列、任务 Trace | 规则式单机聚合，不是线上主题模型或全量 BI |
 | 数据看板 | 文档、片段、反馈、会话、任务数等指标 | `GET /api/dashboard/metrics` | 从 `JsonStore.snapshot()` 与检索器实时聚合 | 文档数、片段数、反馈数、均分、会话数、任务数、分类分布 | 当前不含用户身份、分群和时间窗口分析 |
 | 运行可观测与健康检查 | 监控容器/进程是否可服务 | `GET /api/health/live`、`GET /api/health/ready`、`GET /api/metrics` | 标准库 JSON 日志、进程内请求计数/延迟直方图、存活与就绪检查；前端真实写请求 60 秒超时覆盖后端 45 秒模型调用超时 | 请求量、状态码、路径、P50/P95 延迟、错误数与服务就绪状态 | 指标和日志均为单进程 MVP，不是集中式可观测平台 |
@@ -100,7 +100,7 @@ LangChain Core 适配层：Document + RunnableLambda，封装 retrieve → gener
   → TF-IDF 余弦基线召回 + BM25 词频召回
   → Reciprocal Rank Fusion（RRF）融合排序
   → Citation(source / chunk_id / score / chunk)
-  → 对外保留 TF-IDF 相关度；低于 0.1 的 Top-1 分数视为无证据
+  → 对外保留 TF-IDF 相关度；由 `EVIDENCE_THRESHOLD`（默认 0.1）统一判断 Top-1 是否达到证据门槛
   → LLM Prompt 与前端引用展示
 ```
 
@@ -110,7 +110,9 @@ LangChain Core 适配层：Document + RunnableLambda，封装 retrieve → gener
 - **中文分词基线**：保留中文单字与连续 bigram，同时保留英文、数字和下划线词项，适配套餐名、错误码、功能字段等知识库内容。
 - **双路召回**：对 Query 与每个 Chunk 分别计算 TF-IDF 余弦分和 BM25 分；两路都不依赖外部服务。
 - **融合排序**：使用 Reciprocal Rank Fusion 将两路排名合并，避免直接相加不同量纲的相似度分数；默认取 RRF Top-K。
-- **分数语义**：RRF 分数只用于排序，对外的 `Citation.score` 保留 TF-IDF 余弦分，因此既有 0.1 无证据阈值、Trace 与 UI 百分比仍表示相关度，而不是融合权重。
+- **分数语义**：RRF 与 BM25 的内部得分只用于排序，对外的 `Citation.score` 统一保留 TF-IDF 余弦分，因此 Trace 与 UI 百分比始终表示同一相关度，而不是融合权重。
+- **统一门槛**：`CopilotService.retrieve_evidence()` 是 Agent 与普通问答共用的证据边界；Agent 任务 Trace 会保存原始候选和判定，门槛未通过时不将弱相关片段发送给 LLM。
+- **任务边界**：该门槛约束知识库事实注入；`feedback_analysis` 仍可基于本地反馈快照生成分析，`campaign_plan` 仍可返回待人工审核的通用模板，两者不代表知识库事实已被证实。
 - **可解释性**：每条引用保留来源、片段 ID、分数和文本；前端将引用与答案分开展示，避免把“模型结论”和“原始证据”混在一起。
 
 选择 TF-IDF + BM25 的原因是无需外部向量服务、结果稳定、适合关键词密集的 SaaS 产品资料，也能确保断网时可演示。它仍无法解决全部语义召回问题，因此生产升级方向是 Embedding + 向量库、Reranker、元数据过滤与查询改写。
@@ -199,7 +201,7 @@ Docker Compose
 
 默认加载 `backend/data/evaluation/core_product_qa.v1.json` 中的 **20 条**回归用例，覆盖价格、计费、上手流程、集成故障、安全权限、客服工单、运营规范与资料外问题。每个 Case 可标注期望关键词、正确来源和是否应拒答。一次离线评估会在同一份 Case 上对照 TF-IDF 基线与 Hybrid RRF；为排除云模型耗时、费用和随机性干扰，评估回答固定由当轮检索证据生成确定性文本。
 
-- **Retrieval Hit Rate**：是否检索到分数不低于 0.1 的证据；
+- **Retrieval Hit Rate**：是否检索到 Top-1 TF-IDF 分数不低于 `EVIDENCE_THRESHOLD`（默认 0.1）的证据；
 - **Source Recall@K / MRR**：正确来源是否进入 Top-K，以及首次命中的排名质量；
 - **Average Keyword Recall**：确定性回答中命中期望关键词的比例；
 - **Refusal Accuracy**：资料外问题是否返回明确的信息不足提示；
@@ -225,7 +227,7 @@ Docker Compose
 | React 工作台与深浅主题、任务选择、引用和结构化结果展示 | 用户登录、RBAC、租户隔离（出现多角色/多客户业务需求后实施） |
 | FastAPI REST API、Pydantic 请求/响应校验、单进程固定窗口限流 | Redis 共享限流、鉴权、生产审计日志 |
 | 自研中文 TF-IDF + BM25 双路召回、RRF 融合和可解释引用分数 | Embedding、向量数据库、Reranker |
-| 4 类受控 Agent、专用 Artifact、可筛选任务历史与 Trace 回放 | LangGraph 检查点、状态机、人工审批节点（出现跨步骤审批需求后实施） |
+| 4 类受控 Agent、专用 Artifact、可筛选任务历史、Trace 上下文与可切换策略重跑 | LangGraph 检查点、状态机、人工审批节点（出现跨步骤审批需求后实施） |
 | OpenAI-compatible 模型适配、后端规则降级与延迟/错误 Trace | 多模型路由、成本预算、模型 A/B 实验 |
 | JSON 原子写入、文档/反馈/任务/会话沉淀、Compose 命名卷持久化 | PostgreSQL、Redis、对象存储、异步解析 |
 | JSON 标准输出日志、live/ready 健康检查、进程内 `/api/metrics` | 集中日志、分布式 Trace、跨实例监控告警 |
@@ -274,13 +276,13 @@ Compose 仅暴露 `127.0.0.1:8011`，并用 `flowpilot-data` 命名卷保存运�
 backend/.venv/Scripts/python.exe -m pytest backend/tests -q
 ```
 
-当前已验证：**18 项 pytest 用例通过**。覆盖云模型不可达时的结构化降级、Hybrid RRF 检索排序、Agent Trace 与筛选分页历史、反馈关联后的真实 Insights、20 条版本化评估集、规则 Citation/Faithfulness、DOCX 文本导入，以及 live/ready 健康检查、进程内指标和轻量限流。
+当前已验证：**26 项 pytest 用例通过**。覆盖云模型不可达时的结构化降级、Hybrid RRF 检索排序、共享证据门槛与拒答、Agent Trace 上下文、任务筛选分页与可配置重跑、反馈关联后的真实 Insights、20 条版本化评估集、规则 Citation/Faithfulness、DOCX 文本导入，以及 live/ready 健康检查、进程内指标和轻量限流。
 
 ---
 
 ## 9. 生产化迭代顺序
 
-1. **已完成数据真实性基线**：真实 Insights、关联反馈、版本化 Golden Dataset 和基础任务回放。
+1. **已完成数据真实性基线**：真实 Insights、关联反馈、版本化 Golden Dataset、共享证据门槛和可配置任务重跑。
 2. **继续升级检索与评估**：已完成 BM25 / RRF 与规则 Citation/Faithfulness；下一步先用现有评估集验证 Embedding 或 Reranker 的真实增益，再补人工标注评估与线上 P95/成本指标。
 3. **按业务需求升级 Agent 与平台能力**：跨步骤审批出现后再引入 LangGraph 工作流和人工审批；扫描件/批量导入出现后再补 OCR 与异步队列；多角色或多客户需求出现后再做认证、RBAC 与租户隔离。
 4. **工程交付持续收口**：已补根 `.gitignore`、README、GitHub Actions CI、Docker Compose、健康检查、结构化日志、单进程指标与轻量限流；后续按实际发布环境补镜像仓库、密钥轮换、集中监控和多实例部署。

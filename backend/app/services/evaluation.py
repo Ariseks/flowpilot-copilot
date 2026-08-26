@@ -42,12 +42,16 @@ class EvaluationService:
         hybrid_records: list[tuple[EvaluationCase, list[Citation]]] = []
 
         for case in selected:
-            baseline_citations = self.copilot.retriever.search(case.question, case.top_k, "tfidf")
-            hybrid_citations = self.copilot.retriever.search(case.question, case.top_k, "rrf")
+            baseline_evidence = self.copilot.retrieve_evidence(
+                case.question, case.top_k, "tfidf"
+            )
+            hybrid_evidence = self.copilot.retrieve_evidence(
+                case.question, case.top_k, "rrf"
+            )
+            baseline_citations = baseline_evidence.citations
+            hybrid_citations = hybrid_evidence.citations
             # 离线回归不应被云模型延迟、费用或随机采样污染：固定使用同一份检索证据生成确定性答案。
             citations = hybrid_citations
-            if not citations or citations[0].score < 0.1:
-                citations = []
             answer = self.copilot.demo_answer(case.question, citations)
             if case.should_refuse:
                 citations = []

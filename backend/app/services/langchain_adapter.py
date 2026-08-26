@@ -4,6 +4,7 @@ from langchain_core.documents import Document
 from langchain_core.runnables import RunnableLambda, RunnableSerializable
 
 from app.services.copilot import CopilotService
+from app.services.llm import LLMResult
 from app.services.rag import LocalTfidfRetriever
 
 
@@ -21,7 +22,7 @@ class LangChainRagService:
     def _retrieve(self, payload: dict[str, Any]) -> dict[str, Any]:
         message = str(payload["message"])
         top_k = int(payload.get("top_k", 4))
-        citations = self.retriever.search(message, top_k)
+        citations = self.copilot.retrieve_evidence(message, top_k).citations
         documents = [
             Document(
                 page_content=item.chunk,
@@ -37,15 +38,18 @@ class LangChainRagService:
 
     async def _generate(self, payload: dict[str, Any]) -> dict[str, Any]:
         citations = payload["citations"]
-        result = await self.copilot.llm.complete(
-            "你是 FlowPilot 产品运营 Copilot。仅依据检索文档回答，证据不足时明确说明，并保留引用事实边界。",
-            payload["message"],
-            citations,
-        )
+        if citations:
+            result = await self.copilot.llm.complete(
+                "你是 FlowPilot 产品运营 Copilot。仅依据检索文档回答，证据不足时明确说明，并保留引用事实边界。",
+                payload["message"],
+                citations,
+            )
+        else:
+            result = LLMResult(None, "demo", True, "evidence_threshold", 0)
         answer = result.content or self.copilot.demo_answer(payload["message"], citations)
         return {
             "answer": answer,
-            "mode": self.copilot.llm.mode,
+            "mode": self.copilot.effective_mode(result),
             "framework": "langchain-core",
             "fallback_used": result.fallback_used,
             "documents": [

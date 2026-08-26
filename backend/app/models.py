@@ -47,6 +47,12 @@ class AgentTaskRequest(BaseModel):
     input: str = Field(min_length=1, max_length=8000)
     intent: AgentIntent | Literal["auto"] = "auto"
     top_k: int = Field(default=4, ge=1, le=10)
+    retrieval_strategy: RetrievalStrategy = "rrf"
+
+
+class AgentReplayRequest(BaseModel):
+    retrieval_strategy: RetrievalStrategy | None = None
+    top_k: int | None = Field(default=None, ge=1, le=10)
 
 
 class AgentStep(BaseModel):
@@ -63,8 +69,28 @@ class TimingTrace(BaseModel):
 
 class RetrievalTrace(BaseModel):
     citation_count: int = 0
+    raw_citation_count: int = 0
     top_score: float = 0.0
-    strategy: RetrievalStrategy = "tfidf"
+    strategy: RetrievalStrategy = "rrf"
+    evidence_threshold: float = 0.1
+    evidence_status: Literal["accepted", "refused"] | None = None
+    candidates: list[Citation] = Field(default_factory=list)
+
+
+class RequestTrace(BaseModel):
+    requested_intent: AgentIntent | Literal["auto"] | None = None
+    top_k: int | None = None
+    retrieval_strategy: RetrievalStrategy | None = None
+
+
+class FeedbackContextRecord(BaseModel):
+    id: str
+    message: str
+    rating: int
+    category: str
+    user: str = "演示用户"
+    task_id: str | None = None
+    created_at: str
 
 
 class GenerationTrace(BaseModel):
@@ -73,12 +99,20 @@ class GenerationTrace(BaseModel):
     fallback_used: bool = True
     error_type: str | None = None
     model: str | None = None
+    generator_version: str | None = None
+    prompt_version: str | None = None
+    system_prompt: str | None = None
+    user_prompt: str | None = None
+    context_chunk_ids: list[str] = Field(default_factory=list)
 
 
 class AgentTrace(BaseModel):
     timing: TimingTrace = Field(default_factory=TimingTrace)
     retrieval: RetrievalTrace = Field(default_factory=RetrievalTrace)
     generation: GenerationTrace = Field(default_factory=GenerationTrace)
+    request: RequestTrace = Field(default_factory=RequestTrace)
+    feedback_context: list[FeedbackContextRecord] = Field(default_factory=list)
+    replay_of: str | None = None
 
 
 class AgentTaskResponse(BaseModel):

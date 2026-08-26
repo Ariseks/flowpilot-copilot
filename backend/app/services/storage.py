@@ -57,6 +57,13 @@ class JsonStore:
     def agent_tasks(self) -> list[dict[str, Any]]:
         return self.snapshot()["agent_tasks"]
 
+    def agent_task(self, task_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            for task in self._state["agent_tasks"]:
+                if task["id"] == task_id:
+                    return deepcopy(task)
+        return None
+
     def increment_chat_count(self) -> None:
         with self._lock:
             self._state["chat_count"] += 1

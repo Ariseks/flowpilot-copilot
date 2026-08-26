@@ -6,6 +6,7 @@ from fastapi import APIRouter, File, HTTPException, Request, UploadFile, status
 
 from app.models import (
     AgentTaskListResponse,
+    AgentReplayRequest,
     AgentTaskRequest,
     AgentTaskResponse,
     ChatRequest,
@@ -164,9 +165,15 @@ async def upload_document(request: Request, file: UploadFile = File(...)) -> Doc
 @router.post("/chat", response_model=ChatResponse)
 async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
     services = _services(request)
-    answer, citations = await services.copilot.answer(payload.message, payload.top_k)
+    answer, citations, generation = await services.copilot.answer_with_trace(
+        payload.message, payload.top_k
+    )
     services.store.increment_chat_count()
-    return ChatResponse(answer=answer, mode=services.llm.mode, citations=citations)
+    return ChatResponse(
+        answer=answer,
+        mode=services.copilot.effective_mode(generation),
+        citations=citations,
+    )
 
 
 @router.post("/langchain/chat")
@@ -202,9 +209,9 @@ def list_agent_tasks(
 
 @router.get("/agent/tasks/{task_id}", response_model=AgentTaskResponse)
 def get_agent_task(task_id: str, request: Request) -> dict:
-    for task in _services(request).store.agent_tasks():
-        if task["id"] == task_id:
-            return task
+    task = _services(request).store.agent_task(task_id)
+    if task:
+        return task
     raise HTTPException(status_code=404, detail="未找到该 Agent 任务")
 
 
@@ -214,10 +221,63 @@ def get_agent_task(task_id: str, request: Request) -> dict:
 async def create_agent_task(payload: AgentTaskRequest, request: Request) -> dict:
     services = _services(request)
     task = await services.agent.execute(
-        payload.input, payload.intent, payload.top_k, services.store.feedback()
+        payload.input,
+        payload.intent,
+        payload.top_k,
+        services.store.feedback(),
+        payload.retrieval_strategy,
     )
     services.store.add_agent_task(task)
     return task
+
+
+@router.post(
+    "/agent/tasks/{task_id}/replay",
+    response_model=AgentTaskResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def replay_agent_task(
+    task_id: str, payload: AgentReplayRequest, request: Request
+) -> dict:
+    services = _services(request)
+    original = services.store.agent_task(task_id)
+    if not original:
+        raise HTTPException(status_code=404, detail="未找到该 Agent 任务")
+    original_input = original.get("input")
+    if not isinstance(original_input, str) or not original_input.strip():
+        raise HTTPException(status_code=422, detail="历史任务缺少原始输入，无法重跑")
+
+    stored_trace = original.get("trace") if isinstance(original.get("trace"), dict) else {}
+    stored_request = stored_trace.get("request") if isinstance(stored_trace.get("request"), dict) else {}
+    stored_retrieval = stored_trace.get("retrieval") if isinstance(stored_trace.get("retrieval"), dict) else {}
+    stored_strategy = stored_request.get("retrieval_strategy", stored_retrieval.get("strategy", "rrf"))
+    if payload.retrieval_strategy is not None:
+        retrieval_strategy = payload.retrieval_strategy
+    elif stored_strategy in {"tfidf", "bm25", "rrf"}:
+        retrieval_strategy = stored_strategy
+    else:
+        retrieval_strategy = "rrf"
+    requested_intent = stored_request.get("requested_intent", original.get("intent"))
+    valid_intents = {"auto", "knowledge_qa", "customer_reply", "feedback_analysis", "campaign_plan"}
+    if requested_intent not in valid_intents:
+        requested_intent = original.get("intent")
+    if requested_intent not in valid_intents:
+        raise HTTPException(status_code=422, detail="历史任务缺少有效意图，无法重跑")
+    stored_top_k = stored_request.get("top_k", 4)
+    top_k = payload.top_k if payload.top_k is not None else stored_top_k
+    if not isinstance(top_k, int) or not 1 <= top_k <= 10:
+        top_k = 4
+
+    replay = await services.agent.execute(
+        original_input,
+        requested_intent,
+        top_k,
+        stored_trace.get("feedback_context") if isinstance(stored_trace.get("feedback_context"), list) else services.store.feedback(),
+        retrieval_strategy,
+        replay_of=task_id,
+    )
+    services.store.add_agent_task(replay)
+    return replay
 
 
 @router.get("/feedback", response_model=list[FeedbackRecord])

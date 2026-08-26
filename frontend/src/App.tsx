@@ -3,7 +3,7 @@ import gsap from 'gsap'
 import { apiClient } from './api'
 import { dashboardData as initialDashboard, knowledgeSources as initialSources } from './mockData'
 import { Icon } from './icons'
-import type { CopilotAnswer, DashboardData, EvaluationSet, KnowledgeSource, PageId, TaskHistoryItem } from './types'
+import type { CopilotAnswer, DashboardData, EvaluationSet, KnowledgeSource, PageId, RetrievalStrategy, TaskHistoryItem, TaskReplay } from './types'
 
 const navigation: Array<{ id: PageId; label: string; index: string }> = [
   { id: 'copilot', label: '智能工作台', index: '01' },
@@ -267,8 +267,8 @@ function AnswerPanel({ answer, feedback, feedbackStatus, onFeedback }: { answer:
       <article className="answer-main"><h2>{answer.summary}</h2>{answer.bullets.length > 0 && <><h3>{answer.taskType === '客服回复' ? '处理依据' : answer.taskType === '运营策划' ? '方案要点' : '关键发现'}</h3><ol>{answer.bullets.map((item, index) => <li key={`${item}-${index}`}><span>0{index + 1}</span><p>{item}</p></li>)}</ol></>}<div className="next-action"><span>NEXT</span><p>{answer.nextAction}</p></div></article>
       <aside className="trace-panel"><div className="trace-title">AGENT TRACE</div>{answer.steps.map((step, index) => <div className="trace-step" key={step.id}><span>{index + 1}</span><div><strong>{step.title}</strong><p>{step.detail}</p></div><small>{step.duration}</small></div>)}</aside>
     </div>
-    <div className="citation-stack"><div className="citation-title"><span>EVIDENCE / 引用证据</span><small>点击展开原文</small></div>{answer.citations.map((citation, index) => <button className={openCitation === citation.id ? 'open' : ''} key={citation.id} onClick={() => setOpenCitation(openCitation === citation.id ? '' : citation.id)}><span className="citation-index">[{index + 1}]</span><div><strong>{citation.source}</strong><small>{citation.section}</small>{openCitation === citation.id && <p>{citation.excerpt}</p>}</div><b>{Math.round(citation.score * 100)}%</b></button>)}</div>
-    {answer.trace && <div className="trace-summary"><span>TRACE</span><p>总耗时 {answer.trace.timing.total_ms}ms · 检索 {answer.trace.timing.retrieve_ms}ms · {answer.trace.retrieval.strategy || 'tfidf'} · Top-1 {Math.round(answer.trace.retrieval.top_score * 100)}% · {answer.trace.generation.fallback_used ? '本地规则降级' : '云模型生成'}</p></div>}<div className="answer-footer"><span>这次回答有帮助吗？ {feedbackStatus && <small>{feedbackStatus}</small>}</span><button className={feedback === 'up' ? 'active' : ''} onClick={() => onFeedback('up')}><Icon name="thumbUp" size={15} />有帮助</button><button className={feedback === 'down' ? 'active negative' : ''} onClick={() => onFeedback('down')}><Icon name="thumbDown" size={15} />需改进</button></div>
+    <div className="citation-stack"><div className="citation-title"><span>EVIDENCE / 引用证据</span><small>{answer.citations.length ? '点击展开原文' : '证据门槛未通过'}</small></div>{answer.citations.length ? answer.citations.map((citation, index) => <button className={openCitation === citation.id ? 'open' : ''} key={citation.id} onClick={() => setOpenCitation(openCitation === citation.id ? '' : citation.id)}><span className="citation-index">[{index + 1}]</span><div><strong>{citation.source}</strong><small>{citation.section}</small>{openCitation === citation.id && <p>{citation.excerpt}</p>}</div><b>{Math.round(citation.score * 100)}%</b></button>) : <div className="evidence-refused">未找到达到相关度门槛（{Math.round((answer.trace?.retrieval.evidence_threshold ?? .1) * 100)}%）的可引用资料。系统没有把弱相关片段交给模型。</div>}</div>
+    {answer.trace && <div className="trace-summary"><span>TRACE</span><p>总耗时 {answer.trace.timing.total_ms}ms · 检索 {answer.trace.timing.retrieve_ms}ms · {answer.trace.retrieval.strategy || 'rrf'} · Top-1 {Math.round(answer.trace.retrieval.top_score * 100)}% · {answer.trace.retrieval.evidence_status === 'refused' ? '证据门槛拒答' : answer.trace.generation.fallback_used ? '本地规则降级' : '云模型生成'}</p></div>}<div className="answer-footer"><span>这次回答有帮助吗？ {feedbackStatus && <small>{feedbackStatus}</small>}</span><button className={feedback === 'up' ? 'active' : ''} onClick={() => onFeedback('up')}><Icon name="thumbUp" size={15} />有帮助</button><button className={feedback === 'down' ? 'active negative' : ''} onClick={() => onFeedback('down')}><Icon name="thumbDown" size={15} />需改进</button></div>
   </div>
 }
 
@@ -281,6 +281,11 @@ function WorkflowPage({ onOpen }: { onOpen: (question: string, taskType: string)
   const [error, setError] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [selectedJson, setSelectedJson] = useState('')
+  const [selectedTask, setSelectedTask] = useState<TaskReplay | null>(null)
+  const [replayStrategy, setReplayStrategy] = useState<RetrievalStrategy>('rrf')
+  const [replayTopK, setReplayTopK] = useState(4)
+  const [replayLoading, setReplayLoading] = useState(false)
+  const [replayMessage, setReplayMessage] = useState('')
 
   const loadTasks = async () => {
     setLoading(true); setError('')
@@ -295,16 +300,40 @@ function WorkflowPage({ onOpen }: { onOpen: (question: string, taskType: string)
   useEffect(() => { void loadTasks() }, [intent, fallbackOnly])
 
   const openReplay = async (taskId: string) => {
-    setSelectedId(taskId); setSelectedJson('')
-    try { setSelectedJson(JSON.stringify(await apiClient.getAgentTask(taskId), null, 2)) }
-    catch (loadError) { setSelectedJson(JSON.stringify({ error: loadError instanceof Error ? loadError.message : '读取回放失败' }, null, 2)) }
+    setSelectedId(taskId); setSelectedJson(''); setSelectedTask(null); setReplayMessage('')
+    try {
+      const task = await apiClient.getAgentTask(taskId)
+      setSelectedTask({ id: task.id, input: task.input, intent: task.intent, artifacts: task.artifacts, citations: task.citations.map((item) => ({ id: item.chunk_id, source: item.source, section: `知识片段 ${item.chunk_id}`, excerpt: item.chunk, score: item.score })), trace: task.trace, createdAt: task.created_at })
+      setReplayStrategy(task.trace.request?.retrieval_strategy || task.trace.retrieval.strategy || 'rrf')
+      setReplayTopK(task.trace.request?.top_k ?? task.trace.retrieval.citation_count ?? 4)
+      setSelectedJson(JSON.stringify(task, null, 2))
+    } catch (loadError) {
+      setSelectedJson(JSON.stringify({ error: loadError instanceof Error ? loadError.message : '读取回放失败' }, null, 2))
+    }
   }
+
+  const replay = async () => {
+    if (!selectedTask || replayLoading) return
+    setReplayLoading(true); setReplayMessage('')
+    try {
+      const task = await apiClient.replayAgentTask(selectedTask.id, { retrievalStrategy: replayStrategy, topK: replayTopK })
+      setSelectedTask(task)
+      setSelectedId(task.id)
+      setSelectedJson(JSON.stringify(task, null, 2))
+      setReplayMessage(`已用 ${replayStrategy.toUpperCase()} 重跑，生成新任务 ${task.id}`)
+      await loadTasks()
+    } catch (replayError) {
+      setReplayMessage(replayError instanceof Error ? `重跑失败：${replayError.message}` : '重跑失败')
+    } finally { setReplayLoading(false) }
+  }
+
+  const closeReplay = () => { setSelectedId(null); setSelectedTask(null); setSelectedJson(''); setReplayMessage('') }
 
   return <div className="workflow-page">
     <section className="agent-map animate-in"><div className="map-head"><span>LIVE WORKFLOW / 当前工作流</span><button onClick={() => void loadTasks()}>刷新任务历史 ↗</button></div><div className="node-flow"><FlowBlock index="01" title="Intent Router" note="规则 + 显式选择" /><i /><FlowBlock index="02" title="Hybrid Retrieval" note="TF-IDF + BM25 / RRF" active /><i /><FlowBlock index="03" title="Structured Output" note="Schema validation" /><i /><FlowBlock index="04" title="Human Review" note="Side-effect gate" /></div><div className="map-foot"><span><i />当前策略</span><p>自主性被限制在可审计的业务边界内。</p></div></section>
     <section className="intent-grid">{workflowPresets.map((item) => <article className={`intent-card ${item.color} animate-in`} key={item.id}><span>{item.id}</span><small>{item.title}</small><h2>{item.cn === '用户研究' ? '反馈分析' : item.cn}</h2><p>{item.desc}</p><button onClick={() => onOpen(item.question, item.cn)}>OPEN IN COPILOT <Icon name="chevron" size={14} /></button></article>)}</section>
     <section className="task-history animate-in"><div className="task-history-head"><div><span>TASK HISTORY / 真实后端记录</span><p>按意图或模型降级状态筛选，点击任一任务查看完整 Trace 回放。</p></div><strong>{total}</strong></div><div className="task-history-tools"><select value={intent} onChange={(event) => setIntent(event.target.value)}><option value="">全部任务类型</option><option value="knowledge_qa">知识问答</option><option value="customer_reply">客服回复</option><option value="feedback_analysis">反馈分析</option><option value="campaign_plan">运营策划</option></select><label><input type="checkbox" checked={fallbackOnly} onChange={(event) => setFallbackOnly(event.target.checked)} /> 仅看本地规则降级</label><button onClick={() => void loadTasks()} disabled={loading}>{loading ? '加载中…' : '刷新'}</button></div>{error ? <InlineNotice tone="error" title="任务历史读取失败">{error}</InlineNotice> : <div className="task-history-list">{tasks.length ? tasks.map((task) => <article key={task.id} className="task-history-row"><div><strong>{task.input}</strong><small>{task.intent} · {new Date(task.createdAt).toLocaleString('zh-CN')}</small></div><span>{task.trace.retrieval.strategy || 'tfidf'} · Top-1 {Math.round(task.trace.retrieval.top_score * 100)}%</span><span>{task.trace.timing.total_ms}ms · {task.trace.generation.fallback_used ? 'FALLBACK' : 'CLOUD'}</span><button onClick={() => void openReplay(task.id)}>回放 <Icon name="chevron" size={13} /></button></article>) : <div className="empty-state">暂无任务记录。执行一次 Agent 后会在这里显示真实历史。</div>}</div>}</section>
-    {selectedId && <DetailModal eyebrow="TASK REPLAY / REAL API DATA" title={`任务回放 ${selectedId}`} onClose={() => setSelectedId(null)}>{selectedJson ? <pre className="json-view">{selectedJson}</pre> : <p>正在读取 GET /api/agent/tasks/{selectedId}…</p>}</DetailModal>}
+    {selectedId && <DetailModal eyebrow="TASK REPLAY / REAL API DATA" title={`任务回放 ${selectedId}`} onClose={closeReplay}>{selectedTask && <div className="replay-tools"><label>重新检索策略<select value={replayStrategy} onChange={(event) => setReplayStrategy(event.target.value as RetrievalStrategy)}><option value="rrf">Hybrid RRF</option><option value="tfidf">TF-IDF</option><option value="bm25">BM25</option></select></label><label>Top-K<select value={replayTopK} onChange={(event) => setReplayTopK(Number(event.target.value))}>{[1, 2, 3, 4, 5, 6, 8, 10].map((value) => <option key={value} value={value}>{value} 条</option>)}</select></label><button onClick={() => void replay()} disabled={replayLoading}>{replayLoading ? '重跑中…' : '用此配置重跑'}</button></div>}{replayMessage && <p className="action-message">{replayMessage}</p>}{selectedJson ? <pre className="json-view">{selectedJson}</pre> : <p>正在读取 GET /api/agent/tasks/{selectedId}…</p>}</DetailModal>}
   </div>
 }
 

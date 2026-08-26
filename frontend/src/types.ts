@@ -18,10 +18,51 @@ export interface Citation {
   score: number
 }
 
+export type RetrievalStrategy = 'tfidf' | 'bm25' | 'rrf'
+
+export interface RetrievalTrace {
+  citation_count: number
+  raw_citation_count?: number
+  top_score: number
+  strategy?: RetrievalStrategy
+  evidence_threshold?: number
+  evidence_status?: 'accepted' | 'refused'
+  candidates?: Citation[]
+}
+
+export interface GenerationTrace {
+  mode: 'demo' | 'cloud'
+  provider_used: 'demo' | 'cloud'
+  fallback_used: boolean
+  error_type?: string | null
+  model?: string | null
+  generator_version?: string
+  prompt_version?: string
+}
+
+export interface TaskRequestTrace {
+  requested_intent?: 'knowledge_qa' | 'customer_reply' | 'feedback_analysis' | 'campaign_plan' | 'auto' | null
+  top_k?: number | null
+  retrieval_strategy?: RetrievalStrategy | null
+}
+
+export interface FeedbackContextRecord {
+  id: string
+  message: string
+  rating: number
+  category: string
+  user: string
+  task_id?: string | null
+  created_at: string
+}
+
 export interface AgentTrace {
   timing: { total_ms: number; retrieve_ms: number; generate_ms: number }
-  retrieval: { citation_count: number; top_score: number; strategy?: 'tfidf' | 'bm25' | 'rrf' }
-  generation: { mode: 'demo' | 'cloud'; provider_used: 'demo' | 'cloud'; fallback_used: boolean; error_type?: string | null; model?: string | null }
+  retrieval: RetrievalTrace
+  generation: GenerationTrace
+  request?: TaskRequestTrace
+  feedback_context?: FeedbackContextRecord[]
+  replay_of?: string | null
 }
 
 export interface CopilotAnswer {
@@ -42,6 +83,16 @@ export interface TaskHistoryItem {
   intent: 'knowledge_qa' | 'customer_reply' | 'feedback_analysis' | 'campaign_plan'
   createdAt: string
   trace: AgentTrace
+}
+
+export interface TaskReplay {
+  id: string
+  input: string
+  intent: 'knowledge_qa' | 'customer_reply' | 'feedback_analysis' | 'campaign_plan'
+  artifacts: Record<string, unknown>
+  citations: Citation[]
+  trace: AgentTrace
+  createdAt: string
 }
 
 export interface KnowledgeSource {

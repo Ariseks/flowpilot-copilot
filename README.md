@@ -7,7 +7,7 @@
 - 双路混合检索：中文 TF-IDF 与 BM25 独立召回，使用 RRF 融合排序；对外保留可解释的 TF-IDF 相关度分数与引用证据；
 - 四类受控 Agent：知识问答、客服回复、用户反馈分析、运营活动策划；
 - OpenAI-compatible 模型适配：无 Key 的本地确定性 Demo 与云模型失败降级；
-- 真实质量闭环：任务 Trace、可筛选任务历史与单任务回放、评分关联 `task_id`、低分任务复盘、待补知识信号；
+- 真实质量闭环：统一证据门槛、任务 Trace、可筛选任务历史、可切换检索策略的任务重跑、评分关联 `task_id`、低分任务复盘、待补知识信号；
 - 版本化 Golden Dataset：20 条核心产品/支持/拒答回归题，对照 TF-IDF 基线与 Hybrid RRF，并提供关键词召回、来源命中、MRR、拒答正确率、引用正确性与规则忠实度；
 - 文档导入：文本、TXT、MD、CSV、可提取文本的 PDF 与 DOCX；
 - React + TypeScript 前端、FastAPI API、JSON MVP 持久化、LangChain Core Runnable 适配；
@@ -100,6 +100,9 @@ npm run build
 - Agent 只生成草稿和结构化建议，不执行外部写操作；
 - 当前使用 LangChain Core 的 `Document` 与 Runnable，未使用 LangGraph；
 - 当前检索为 TF-IDF + BM25 的 RRF 融合；仍未实现 Embedding 向量数据库、Reranker 与生产级权限过滤；
+- Agent/Copilot 共用 Top-1 TF-IDF 证据门槛（默认 `0.1`）；Agent 任务 Trace 会保留门槛判定与原始候选，但弱相关片段不会交给模型；
+- 证据门槛约束的是知识库事实注入：反馈分析仍可基于本地反馈快照运行，运营策划仍可返回待人工审核的通用方案模板；两者不应被解读为知识库事实结论；
+- 任务回放只重跑本项目内部的检索与生成链路，可切换 `tfidf`、`bm25`、`rrf` 和 Top-K，不执行外部写操作；
 - 内置评估集用于回归验证，不代表真实线上业务准确率；
 - 当前运行日志为标准输出 JSON，`/api/metrics` 为单进程内存快照；两者适合单机演示，不替代集中式日志、链路追踪和生产级监控；
 - Docker Compose 已于本机 Docker Desktop（Linux 容器模式）完成首次镜像构建与启动验证；当前单服务容器通过 `127.0.0.1:8011` 提供访问，健康检查通过。Compose 顶层显式设置 `name: flowpilot`，避免中文项目目录在当前 Compose 版本中被解析为空项目名。

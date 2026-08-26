@@ -1,12 +1,52 @@
-from app.models import Citation
+from dataclasses import dataclass
+
+from app.models import Citation, RetrievalStrategy
 from app.services.llm import LLMClient, LLMResult
 from app.services.rag import LocalTfidfRetriever
 
 
+@dataclass(frozen=True)
+class EvidenceResult:
+    raw_citations: list[Citation]
+    citations: list[Citation]
+    threshold: float
+
+    @property
+    def status(self) -> str:
+        return "accepted" if self.citations else "refused"
+
+
 class CopilotService:
-    def __init__(self, retriever: LocalTfidfRetriever, llm: LLMClient):
+    def __init__(
+        self,
+        retriever: LocalTfidfRetriever,
+        llm: LLMClient,
+        evidence_threshold: float = 0.1,
+    ):
         self.retriever = retriever
         self.llm = llm
+        self.evidence_threshold = evidence_threshold
+
+    @staticmethod
+    def effective_mode(result: LLMResult) -> str:
+        """Return the mode that actually produced the visible answer."""
+        return "cloud" if result.provider_used == "cloud" and not result.fallback_used else "demo"
+
+    def retrieve_evidence(
+        self,
+        message: str,
+        top_k: int,
+        strategy: RetrievalStrategy | None = None,
+    ) -> EvidenceResult:
+        raw_citations = self.retriever.search(message, top_k, strategy)
+        # 门槛固定看排序结果的 Top-1 TF-IDF 分数；通过后只发送仍达标的候选。
+        # 这样 BM25/RRF 的排序策略不会改变分数的量纲，也不会把弱相关片段交给模型。
+        citations = []
+        if raw_citations and raw_citations[0].score >= self.evidence_threshold:
+            citations = [
+                item for item in raw_citations if item.score >= self.evidence_threshold
+            ]
+        return EvidenceResult(raw_citations, citations, self.evidence_threshold)
 
     @staticmethod
     def demo_answer(message: str, citations: list[Citation]) -> str:
@@ -21,10 +61,14 @@ class CopilotService:
     async def answer_with_trace(
         self, message: str, top_k: int
     ) -> tuple[str, list[Citation], LLMResult]:
-        citations = self.retriever.search(message, top_k)
-        # RRF 排序沿用 TF-IDF 相似度作为 Citation.score；低分结果仍是无关片段，按原边界拒答。
-        if not citations or citations[0].score < 0.1:
-            citations = []
+        evidence = self.retrieve_evidence(message, top_k)
+        citations = evidence.citations
+        if not citations:
+            return (
+                self.demo_answer(message, citations),
+                citations,
+                LLMResult(None, "demo", True, "evidence_threshold", 0),
+            )
         result = await self.llm.complete(
             "你是 FlowPilot 产品运营 Copilot。仅依据资料用中文准确回答；信息不足时明确说明，并保留事实边界。",
             message,
