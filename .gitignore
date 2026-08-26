@@ -1,0 +1,41 @@
+# Secrets and local state
+.env
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+*.pem
+*.key
+backend/data/state.json
+backend/data/test-runtime-state.json
+backend/data/verification-state.json
+backend/data/*.log
+
+# WorkBuddy local workspace data
+.workbuddy/
+.playwright-cli/
+
+# Python
+backend/.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Node and Vite
+frontend/node_modules/
+frontend/dist/
+frontend/release-dist/
+frontend/*.tsbuildinfo
+frontend/vite.config.js.timestamp-*.mjs
+
+# Workspace artifacts
+outputs/
+pytest-cache-files-*/
+*.log
+
+# IDE and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

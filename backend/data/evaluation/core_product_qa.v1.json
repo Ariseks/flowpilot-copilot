@@ -1,0 +1,26 @@
+{
+  "name": "FlowPilot 核心产品与支持回归集",
+  "version": "v1.0",
+  "cases": [
+    {"id":"pricing-001","category":"pricing","question":"专业版每月多少钱？","expected_keywords":["99","专业版"],"expected_sources":["内置产品文档/产品概览"],"top_k":4},
+    {"id":"pricing-002","category":"pricing","question":"免费版每月有多少次任务运行？","expected_keywords":["500","免费版"],"expected_sources":["内置产品文档/产品概览"],"top_k":4},
+    {"id":"pricing-003","category":"pricing","question":"专业版每月包含多少任务运行？","expected_keywords":["2万","专业版"],"expected_sources":["内置产品文档/产品概览"],"top_k":4},
+    {"id":"billing-001","category":"billing","question":"任务运行次数如何计算？","expected_keywords":["成功执行","动作"],"expected_sources":["内置 FAQ/计费"],"top_k":4},
+    {"id":"billing-002","category":"billing","question":"额度用完后流程会怎么样？","expected_keywords":["暂停","通知管理员"],"expected_sources":["内置 FAQ/计费"],"top_k":4},
+    {"id":"billing-003","category":"billing","question":"升级套餐后什么时候生效？","expected_keywords":["立即生效","补差价"],"expected_sources":["内置 FAQ/计费"],"top_k":4},
+    {"id":"onboarding-001","category":"onboarding","question":"创建第一个自动化流程有哪些步骤？","expected_keywords":["模板","触发器","发布"],"expected_sources":["内置产品文档/新手指南"],"top_k":4},
+    {"id":"onboarding-002","category":"onboarding","question":"专业版流程失败后会自动重试几次？","expected_keywords":["两次","重试"],"expected_sources":["内置产品文档/新手指南"],"top_k":4},
+    {"id":"integration-001","category":"integration","question":"第三方连接过期怎么处理？","expected_keywords":["重新授权","连接中心"],"expected_sources":["内置 FAQ/集成故障"],"top_k":4},
+    {"id":"integration-002","category":"integration","question":"Webhook 没有触发需要检查什么？","expected_keywords":["POST","Content-Type"],"expected_sources":["内置 FAQ/集成故障"],"top_k":4},
+    {"id":"integration-003","category":"integration","question":"能连接自有系统吗？","expected_keywords":["HTTP","Webhook"],"expected_sources":["内置 FAQ/集成故障"],"top_k":4},
+    {"id":"security-001","category":"security","question":"企业版有哪些安全能力？","expected_keywords":["SSO","审计日志"],"expected_sources":["内置产品文档/安全与权限"],"top_k":4},
+    {"id":"security-002","category":"security","question":"查看者可以修改流程吗？","expected_keywords":["仅能查看","运行结果"],"expected_sources":["内置产品文档/安全与权限"],"top_k":4},
+    {"id":"security-003","category":"security","question":"管理员有哪些权限？","expected_keywords":["成员","连接","流程"],"expected_sources":["内置产品文档/安全与权限"],"top_k":4},
+    {"id":"support-001","category":"support","question":"升级专业版后仍显示500次额度怎么办？","expected_keywords":["缓存","重新登录"],"expected_sources":["内置客服工单/2026年7月样本"],"top_k":4},
+    {"id":"support-002","category":"support","question":"流程失败却只显示参数错误怎么办？","expected_keywords":["字段级","提示"],"expected_sources":["内置客服工单/2026年7月样本"],"top_k":4},
+    {"id":"campaign-001","category":"campaign","question":"新用户激活活动应该关注哪些指标？","expected_keywords":["首个流程发布率","七日留存"],"expected_sources":["内置运营手册/活动规范"],"top_k":4},
+    {"id":"campaign-002","category":"campaign","question":"活动文案可以承诺未上线功能吗？","expected_keywords":["不得","未上线功能"],"expected_sources":["内置运营手册/活动规范"],"top_k":4},
+    {"id":"refusal-001","category":"refusal","question":"FlowPilot 的上海办公室具体地址是什么？","expected_keywords":[],"expected_sources":[],"should_refuse":true,"top_k":4},
+    {"id":"refusal-002","category":"refusal","question":"下周 Meta 股票会涨多少？","expected_keywords":[],"expected_sources":[],"should_refuse":true,"top_k":4}
+  ]
+}

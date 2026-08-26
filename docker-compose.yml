@@ -1,0 +1,34 @@
+name: flowpilot
+
+services:
+  flowpilot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: flowpilot-copilot:local
+    ports:
+      - "127.0.0.1:8011:8011"
+    env_file:
+      - path: ./backend/.env
+        required: false
+    environment:
+      DATA_FILE: /app/runtime-data/state.json
+      RATE_LIMIT: ${RATE_LIMIT:-120}
+      RATE_WINDOW_SECONDS: ${RATE_WINDOW_SECONDS:-60}
+    volumes:
+      - flowpilot-data:/app/runtime-data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8011/api/health/ready', timeout=3)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  flowpilot-data:
+    name: flowpilot-data
