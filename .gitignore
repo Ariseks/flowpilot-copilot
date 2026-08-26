@@ -34,6 +34,10 @@ outputs/
 pytest-cache-files-*/
 *.log
 
+# Private interview/support materials: publish only the project brief.
+materials/**
+!materials/project-brief.md
+
 # IDE and OS
 .vscode/
 .idea/
