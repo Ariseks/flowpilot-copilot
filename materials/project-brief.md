@@ -236,22 +236,9 @@ Docker Compose
 
 ---
 
-## 8. 面试表达要点
+## 8. 本地运行与验证
 
-> 我做的不是一个自由调用工具的聊天机器人，而是一个面向 SaaS 运营场景的受控 Agent MVP。前端通过 FastAPI 调用 Agent 任务接口；后端先依据显式类型或关键词进行任务路由，再用自研中文 TF-IDF 与 BM25 双路召回、RRF 融合得到 Top-K 证据，交给 OpenAI-compatible 模型生成。不同任务会返回不同结构，例如客服回复、反馈报告或运营活动方案，同时保留执行步骤、引用和调用 Trace；历史页可按任务类型和降级状态筛选并回放。为避免上游模型波动把接口打成 500，我在模型适配层增加了异常捕获和基于检索证据的后端确定性降级，并记录降级和耗时。评估使用 20 条版本化 Golden Dataset，对照 TF-IDF 与 Hybrid RRF 的来源命中和 MRR，并用规则检查引用正确性、回答忠实度与拒答边界。交付上使用 Docker Compose 把前端构建、非 root 后端运行、状态卷和就绪检查打包；服务输出结构化请求日志，提供轻量限流和进程内延迟指标。对于未实现的向量检索、LangGraph、权限和线上 BI，我在材料中明确标注边界，而不虚构生产能力。
-
-可进一步展开的技术取舍：
-
-- 为什么先做 TF-IDF + BM25 / RRF：零外部依赖、可解释、适配产品术语；Embedding 或 Reranker 必须先在 Golden Dataset 上证明增益。
-- 为什么不是完全自治 Agent：企业运营场景优先控制风险、稳定性和审计性。
-- 为什么 LangChain 只用 Core：先把检索和数据流做透明，再用 Runnable 标准化编排；复杂状态和人工审批出现后再引入 LangGraph。
-- 为什么规则降级仍有价值：它复用真实检索证据，保证模型依赖异常时接口可用，但不会伪装为云模型回答。
-
----
-
-## 9. 本地运行与验证
-
-### 9.1 启动服务
+### 8.1 启动服务
 
 在项目根目录执行：
 
@@ -270,7 +257,7 @@ backend/.venv/Scripts/python.exe -m uvicorn app.main:app --app-dir backend --hos
 
 前端由 FastAPI 从 `frontend/release-dist` 托管。云模式是否启用取决于 `.env` 中是否存在有效的 OpenAI-compatible 模型配置；无密钥时仍可进入 Demo 模式完成完整链路演示。
 
-### 9.2 Docker Compose 交付
+### 8.2 Docker Compose 交付
 
 ```bash
 copy backend/.env.example backend/.env
@@ -281,7 +268,7 @@ docker compose logs -f flowpilot
 
 Compose 仅暴露 `127.0.0.1:8011`，并用 `flowpilot-data` 命名卷保存运行状态。停止应用使用 `docker compose down`；该命令不会删除命名卷。当前工作环境没有 Docker CLI，因此 Dockerfile 与 Compose 只完成了静态审阅，未声称已完成本机镜像构建或容器运行验证。
 
-### 9.3 回归验证口径
+### 8.3 回归验证口径
 
 ```bash
 backend/.venv/Scripts/python.exe -m pytest backend/tests -q
@@ -291,7 +278,7 @@ backend/.venv/Scripts/python.exe -m pytest backend/tests -q
 
 ---
 
-## 10. 生产化迭代顺序
+## 9. 生产化迭代顺序
 
 1. **已完成数据真实性基线**：真实 Insights、关联反馈、版本化 Golden Dataset 和基础任务回放。
 2. **继续升级检索与评估**：已完成 BM25 / RRF 与规则 Citation/Faithfulness；下一步先用现有评估集验证 Embedding 或 Reranker 的真实增益，再补人工标注评估与线上 P95/成本指标。
