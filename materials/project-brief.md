@@ -266,7 +266,7 @@ docker compose ps
 docker compose logs -f flowpilot
 ```
 
-Compose 仅暴露 `127.0.0.1:8011`，并用 `flowpilot-data` 命名卷保存运行状态。停止应用使用 `docker compose down`；该命令不会删除命名卷。当前工作环境没有 Docker CLI，因此 Dockerfile 与 Compose 只完成了静态审阅，未声称已完成本机镜像构建或容器运行验证。
+Compose 仅暴露 `127.0.0.1:8011`，并用 `flowpilot-data` 命名卷保存运行状态。停止应用使用 `docker compose down`；该命令不会删除命名卷。Docker Compose 已于本机 Docker Desktop（Linux 容器模式）完成镜像构建与启动验证：单服务容器通过 `127.0.0.1:8011` 提供服务，`/api/health/ready` 就绪检查返回 200，`flowpilot-data` 命名卷已创建，容器重建不会丢失运行状态。
 
 ### 8.3 回归验证口径
 

@@ -18,7 +18,7 @@
 ```text
 backend/       FastAPI、RAG、Agent、评估、Trace、数据文件和测试
 frontend/      React + TypeScript + Vite 产品界面
-materials/     项目介绍、演示脚本、简历描述、面试追问
+materials/     项目介绍与技术说明（project-brief.md）
 ```
 
 ## 快速启动
