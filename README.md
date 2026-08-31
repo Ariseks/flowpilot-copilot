@@ -2,6 +2,8 @@
 
 面向 SaaS 产品运营、客服与知识管理员的本地可运行 RAG + 受控 Agent MVP。
 
+<img width="2118" height="1226" alt="image" src="https://github.com/user-attachments/assets/7a69b902-369a-45f4-ae56-5535676a2250" />
+
 ## 已实现能力
 
 - 双路混合检索：中文 TF-IDF 与 BM25 独立召回，使用 RRF 融合排序；对外保留可解释的 TF-IDF 相关度分数与引用证据；
